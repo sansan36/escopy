@@ -45,9 +45,8 @@ func main() {
 	}
 
 	sourceIndices := []string{
-		// "unclaim-search-2",
-		// "unclaim-search-8",
-		"unclaim-search-21",
+		"index-1",
+		// list index here...
 	}
 
 	esLocal, err := elasticsearch.NewClient(elasticsearch.Config{
