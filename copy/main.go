@@ -45,7 +45,7 @@ func main() {
 	}
 
 	sourceIndices := []string{
-		"index-1",
+		"re-unclaim-search-2",
 		// list index here...
 	}
 
@@ -76,7 +76,14 @@ func main() {
 		go func() {
 			defer wg.Done()
 			for index := range indexChan {
-				processIndex(esLocal, esRemote, index, &failedCounts)
+				query := map[string]interface{}{
+					"query": map[string]interface{}{
+						"terms": map[string]interface{}{
+							"header_id": []int{6891,6892,6894,6895,6896,6897,7223,7224,7225,7226,7227,7228,7229,7230,7231,7232,7233,7234,7235,7236,7237,7238,7239,7241,7242,7243,7244,7245,7246,7247,7248,7249,7250,7251,7252,7253,7254,7255,6774,6775,6776,6777,6778,6779,6780,6788,6817,6818,6819,6820,6821,6822,6789,6790,6791,6792,6793,6794,6795,6796,6802,6823,6824,6825,6826,6827,6803,6805,6806,6807,6808,6809,6828,6810,6811,6812,6813,6814,6815,6816,6650,6651,6652,6653,6654,6655,6656,6630,6631,6632,6633,6634,6657,6658,6635,6636,6637,6638,6639,6640,6641,6642,6643,6644,6645,6646,6647,6648,6659,6660,6687,6688,6689,6690,6691,6670,6671,6672,6692,6693,6694,6695,6673,6674,6675,6676,6677,6678,6679,6680,6681,6682,6683,6684,6685,6686,6696,6697,6698,6699,6700,6701,6702,6703,6704,6705,6706,6707,6708,6709,6710,6711,6712,6713,6714,6715,6716,6717,6718,6719,6720,6721,6722,6723,6491,6492,6493,6494,6495,6496,6497,6498,6499,6500,6501,6502,6503,6504,6505,6506,6507,6508,6509,6510,6511,6558,6559,6561,6562,6563,6564,6947,6565,6566,6567,6568,6569,6570,6571,6572,6573,6574,6575,6576,6577,6578,6579,6580,6581,6582,6583,6584,6585,6586,6587,6588,6589,6590,6591,6592,6593,6594,6595,6596,6597,6598,6599,6600,6601,6602,6603,6604,6605,6606,6607,6608,6609,6610,6611,6612,6613,6614,6615,6616,6617,6618,6619,6649},
+						},
+					},
+				}
+				processIndex(esLocal, esRemote, index, &failedCounts, query)
 			}
 		}()
 	}
@@ -123,11 +130,11 @@ func getEnvAsMB(name string, defaultMB int64) int64 {
 	return int64(val * 1024 * 1024)
 }
 
-func processIndex(esLocal, esRemote *elasticsearch.Client, sourceIndex string, failedCounts *sync.Map) {
+func processIndex(esLocal, esRemote *elasticsearch.Client, sourceIndex string, failedCounts *sync.Map, query map[string]interface{}) {
 	targetIndex := sourceIndex
 	log.Printf("🚀 Menyalin index: %s", sourceIndex)
 
-	total := countDocuments(esLocal, sourceIndex, failedCounts)
+	total := countDocuments(esLocal, sourceIndex, failedCounts, query)
 	log.Printf("📊 [%s] Jumlah dokumen sumber: %d", sourceIndex, total)
 
 	existsRes, err := esRemote.Indices.Exists([]string{targetIndex})
@@ -183,11 +190,15 @@ func processIndex(esLocal, esRemote *elasticsearch.Client, sourceIndex string, f
 		log.Printf("ℹ️  [%s] Index sudah ada di target", sourceIndex)
 	}
 
-	copyDocuments(esLocal, esRemote, sourceIndex, targetIndex, failedCounts)
+	copyDocuments(esLocal, esRemote, sourceIndex, targetIndex, failedCounts, query)
 }
 
-func countDocuments(es *elasticsearch.Client, index string, failedCounts *sync.Map) int {
-	res, err := es.Count(es.Count.WithIndex(index))
+func countDocuments(es *elasticsearch.Client, index string, failedCounts *sync.Map, query map[string]interface{}) int {
+	queryJson, _ := json.Marshal(query)
+	res, err := es.Count(
+		es.Count.WithIndex(index),
+		es.Count.WithBody(bytes.NewReader(queryJson)),
+	)
 	if err != nil {
 		log.Printf("⚠️ Gagal menghitung dokumen untuk index %s: %s", index, err)
 		return 0
@@ -214,7 +225,7 @@ func getIndexComponent(es *elasticsearch.Client, indexName, component string) in
 	return data
 }
 
-func copyDocuments(esLocal, esRemote *elasticsearch.Client, sourceIndex, targetIndex string, failedCounts *sync.Map) {
+func copyDocuments(esLocal, esRemote *elasticsearch.Client, sourceIndex, targetIndex string, failedCounts *sync.Map, query map[string]interface{}) {
 	scrollID := ""
 	totalDocuments := 0
 	batchChan := make(chan []Hit)
@@ -257,10 +268,12 @@ func copyDocuments(esLocal, esRemote *elasticsearch.Client, sourceIndex, targetI
 		var res *esapi.Response
 		var err error
 		if scrollID == "" {
+			queryJSON, _ := json.Marshal(query)
 			res, err = esLocal.Search(
 				esLocal.Search.WithIndex(sourceIndex),
 				esLocal.Search.WithScroll(1*time.Minute),
 				esLocal.Search.WithSize(getEnvAsInt("QUERY_SIZE", 100)),
+				esLocal.Search.WithBody(bytes.NewReader(queryJSON)),
 			)
 		} else {
 			res, err = esLocal.Scroll(
@@ -303,7 +316,7 @@ func sendBulk(es *elasticsearch.Client, sourceIndex, targetIndex string, hits []
 	bulkSize := len(bulkBody.String())
 	log.Printf("📦 [%s] Bulk - %d dokumen, size: %s", sourceIndex, len(hits), formatBytes(bulkSize))
 
-	if err := tryBulkWithRetry(es, targetIndex, bulkBody.String(), 5); err != nil {
+	if err := tryBulkWithRetry(es, targetIndex, bulkBody.String(), 2); err != nil {
 		log.Printf("❌ [%s] Bulk gagal: %s", sourceIndex, err)
 		atomic.AddInt64(failedCount, int64(len(hits))) // ⬅️ Tambah jumlah gagal
 	}
